@@ -2,25 +2,26 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/mman.h>
 #include <semaphore.h>
 
 sem_t mutex; // Ensures only one reader updates read_count at a time.
 sem_t rw_mutex; // Locks if at least one reader is inside to block any writers from entering.
 int read_count = 0; // Counts the number of readers
-int global_int = 0;
+// int global_int = 0;
 
-void writer() {
+void writer(int* global_int) {
     
     printf("Writer process started\n");
     sem_wait(&rw_mutex);
     
-    global_int = 1;
+    *global_int = 1;
     printf("Writer changes global_int = 1\n");
     
     sem_post(&rw_mutex);
     printf("Writer process ended\n");
 }
-void reader(int id) {
+void reader(int id, int* global_int) {
     
     printf("Reader %d started reading.\n", id + 1);
     
@@ -31,12 +32,12 @@ void reader(int id) {
 	}
 	sem_post(&mutex);
 	
-	printf("Reader %d read the Variable global_int = %d\n", id + 1, global_int);
+	printf("Reader %d read the Variable global_int = %d\n", id + 1, *global_int);
 	
 	sem_wait(&mutex);
 	read_count--;
 	if (read_count == 0) {
-	    sem_wait(&rw_mutex);
+	    sem_post(&rw_mutex);
 	}
 	sem_post(&mutex);
 	
@@ -50,20 +51,34 @@ int main() {
     int num_processes = 5;
     pid_t pids[num_processes];
     int i;
-
-    for (i = 0; i < num_processes; i++) {
+    
+    int *global_int = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                           MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    *global_int = 0;
+    
+    for (i = 0; i < 2; i++) {
         pids[i] = fork();
 
         if (pids[i] == 0) { // Child Process starts and ends here.
-            reader(i);
-            // exit(0); // Exit child process
+            reader(i, global_int);
+            exit(0); // Exit child process
         }
         // Parent process continues to the next iteration
     }
     
     pid_t writer_pid = fork();
     if (writer_pid == 0) { // One Writer Process
-        writer();
+        writer(global_int);
+        exit(0);
+    }
+    for (i = 2; i < num_processes; i++) {
+        pids[i] = fork();
+
+        if (pids[i] == 0) { // Child Process starts and ends here.
+            reader(i, global_int);
+            exit(0); // Exit child process
+        }
+        // Parent process continues to the next iteration
     }
 
     // Parent process waits for all child processes to finish
@@ -75,5 +90,7 @@ int main() {
     printf("Writer process joined\n");
 
     printf("All child processes finished\n");
+    
+    munmap(global_int, sizeof(int));
     return 0;
 }
